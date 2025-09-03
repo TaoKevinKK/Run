@@ -57,6 +57,7 @@ class KubeRayWorkerGroup:
     volumes: list[dict[str, Any]] = field(default_factory=list)
     labels: dict[str, Any] = field(default_factory=dict)
     annotations: dict[str, Any] = field(default_factory=dict)
+    spec_kwargs: dict[str, Any] = field(default_factory=dict)
 
     def __post_init__(self):
         # Set min_replicas and max_replicas to match replicas if not set
@@ -80,12 +81,15 @@ class KubeRayExecutor(Executor):
     image: str = ""  # Will be set in __post_init__ if empty
     head_cpu: str = "1"
     head_memory: str = "2Gi"
+    head_gpu: str = "0"
     ray_head_start_params: dict[str, Any] = field(default_factory=dict)
     ray_worker_start_params: dict[str, Any] = field(default_factory=dict)
     worker_groups: list[KubeRayWorkerGroup] = field(default_factory=list)
     labels: dict[str, Any] = field(default_factory=dict)
+    annotations: dict[str, Any] = field(default_factory=dict)
     service_type: str = "ClusterIP"
-    head_ports: list[dict[str, Any]] = field(default_factory=list)
+    enable_ingress: str = "false"
+    head_ports: dict[str, Any] = field(default_factory=dict)
     volume_mounts: list[dict[str, Any]] = field(default_factory=list)
     volumes: list[dict[str, Any]] = field(default_factory=list)
     reuse_volumes_in_worker_groups: bool = True
@@ -114,12 +118,15 @@ class KubeRayExecutor(Executor):
             k8s_namespace=self.namespace,
             labels=self.labels,
             ray_version=self.ray_version,
+            annotations=self.annotations
         )
         cluster = populate_ray_head(
             cluster,
             ray_image=self.image,
             service_type=self.service_type,
             cpu_requests=self.head_cpu,
+            gpu_limits=self.head_gpu,
+            gpu_requests=self.head_gpu,
             memory_requests=self.head_memory,
             cpu_limits=self.head_cpu,
             memory_limits=self.head_memory,
@@ -131,6 +138,7 @@ class KubeRayExecutor(Executor):
             spec_kwargs=self.spec_kwargs,
             lifecycle_kwargs=self.lifecycle_kwargs,
             container_kwargs=self.container_kwargs,
+            enable_ingress=self.enable_ingress
         )
         for worker_group in self.worker_groups:
             cluster = populate_worker_group(
@@ -172,6 +180,7 @@ def populate_meta(
     k8s_namespace: str,
     labels: dict,
     ray_version: str,
+    annotations: dict = None
 ) -> dict[str, Any]:
     assert is_valid_name(name), f"Invalid cluster name: {name}."
 
@@ -181,6 +190,7 @@ def populate_meta(
         "name": name,
         "namespace": k8s_namespace,
         "labels": labels,
+        "annotations": annotations or {}
     }
     cluster["spec"] = {"rayVersion": ray_version}
     return cluster
@@ -192,16 +202,19 @@ def populate_ray_head(
     service_type: str,
     cpu_requests: str,
     memory_requests: str,
+    gpu_requests: str,
     cpu_limits: str,
     memory_limits: str,
+    gpu_limits: str,
     ray_start_params: dict,
-    head_ports: list[dict[str, Any]],
+    head_ports: dict[str, Any],
     env_vars: dict[str, str],
     volume_mounts: list[dict[str, Any]],
     volumes: list[dict[str, Any]],
     spec_kwargs: dict[str, Any],
     lifecycle_kwargs: dict[str, Any],
     container_kwargs: dict[str, Any],
+    enable_ingress: str = "false"
 ) -> dict[str, Any]:
     # make sure metadata exists
     if "spec" in cluster.keys():
@@ -218,6 +231,7 @@ def populate_ray_head(
     # populate headGroupSpec
     cluster["spec"]["headGroupSpec"] = {
         "serviceType": service_type,
+        "enableIngress":enable_ingress,
         "rayStartParams": ray_start_params,
         "template": {
             "spec": {
@@ -225,8 +239,8 @@ def populate_ray_head(
                     {
                         "image": ray_image,
                         "name": "ray-head",
-                        "ports": head_ports,
                         "env": [{"name": k, "value": v} for k, v in env_vars.items()],
+                        "ports": [{"name": k, "containerPort": v} for k, v in head_ports.items()],
                         "lifecycle": {
                             "preStop": {"exec": {"command": ["/bin/sh", "-c", "ray stop"]}},
                             **lifecycle_kwargs,
@@ -235,8 +249,9 @@ def populate_ray_head(
                             "requests": {
                                 "cpu": cpu_requests,
                                 "memory": memory_requests,
+                                "nvidia.com/gpu": gpu_requests
                             },
-                            "limits": {"cpu": cpu_limits, "memory": memory_limits},
+                            "limits": {"cpu": cpu_limits, "memory": memory_limits, "nvidia.com/gpu": gpu_limits},
                         },
                         "volumeMounts": volume_mounts,
                         **container_kwargs,

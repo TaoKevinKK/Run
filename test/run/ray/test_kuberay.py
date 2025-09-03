@@ -23,6 +23,7 @@ import pytest
 import yaml
 from kubernetes.client.rest import ApiException
 
+from nemo_run.core.execution.docker import ensure_network
 from nemo_run.core.execution.kuberay import KubeRayExecutor, KubeRayWorkerGroup
 from nemo_run.run.ray.kuberay import KubeRayCluster, KubeRayJob, get_user
 
@@ -717,7 +718,7 @@ class TestKubeRayArtifacts:
     def test_advanced_cluster_artifact1(self):
         """Test advanced cluster generation with GPUs and volumes."""
         # artifact_path = os.path.join(ARTIFACTS_DIR, "expected_kuberay_cluster_advanced.yaml")
-        artifact_path = "/Users/laifu/open_source/Run/test/core/execution/artifacts/expected_kuberay_cluster_advanced_1.yaml"
+        artifact_path = "test/core/execution/artifacts/expected_kuberay_cluster_advanced_1.yaml"
 
         executor = KubeRayExecutor(
             namespace="ray",
@@ -725,7 +726,9 @@ class TestKubeRayArtifacts:
             image="custom/ray:gpu",
             head_cpu="4",
             head_memory="16Gi",
-            ray_head_start_params={"dashboard-host": "0.0.0.0", "num-cpus": "4"},
+            head_ports={"gcs": 6379, "agent": 6377},
+            enable_ingress="true",
+            ray_head_start_params={"dashboard-host": "0.0.0.0", "num-cpus": "0", "redis-username": "xxx", "redis-password":"yyy"},
             worker_groups=[
                 KubeRayWorkerGroup(
                     group_name="gpu-workers",
@@ -738,13 +741,15 @@ class TestKubeRayArtifacts:
                 )
             ],
             volumes=[
-                {"name": "data", "persistentVolumeClaim": {"claimName": "data-pvc"}},
+                {"name": "dshm", "emptyDir": {"medium": "Memory"}},
             ],
             volume_mounts=[
-                {"name": "data", "mountPath": "/data"},
+                {"name": "dshm", "mountPath": "/dev/shm", "mountPropagation": "None"},
             ],
-            labels={"team": "ml", "env": "prod"},
-            env_vars={"NCCL_DEBUG": "INFO"},
+            labels={"ray.io/scheduler-name": "volcano", "ray.io/priority-class-name": "high-priority", "volcano.sh/queue-name": "qqq", "controller-tools.k8s.io":"1.0"},
+            env_vars={"RAY_JOB_AGENT_PULL_MODE": "true"},
+            spec_kwargs={"securityContext": {"capabilities": {"add": "SYS_PTRACE"}}, "restartPolicy": "Never"},
+            annotations={"ray.io/ft-enabled":"true", "kubernetes.io/ingress.class": "nginx-private", "nginx.ingress.kubernetes.io/proxy-body-size": "8m"}
         )
 
         body = executor.get_cluster_body("ml-training-cluster")
