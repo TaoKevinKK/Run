@@ -1,0 +1,145 @@
+apiVersion: ray.io/v1
+kind: RayCluster
+metadata:
+  labels:
+    ray.io/scheduler-name: volcano
+    ray.io/priority-class-name: minimax-high-priority
+    volcano.sh/queue-name: ${queueName}
+    controller-tools.k8s.io: "1.0"
+  annotations:
+    ray.io/ft-enabled: "true"
+    kubernetes.io/ingress.class: nginx-private
+    nginx.ingress.kubernetes.io/proxy-body-size: 8m
+  name: ${name}
+  namespace: ray
+spec:
+  rayVersion: 2.43.0
+  headGroupSpec:
+    serviceType: ClusterIP
+    enableIngress: true
+    rayStartParams:
+      dashboard-host: '0.0.0.0'
+      num-cpus: "0"
+      redis-username: $REDIS_USERNAME
+      redis-password: $REDIS_PASSWORD
+    template:
+      metadata:
+        labels: {}
+      spec:
+        imagePullSecrets:
+          - name: minimax-registry
+          - name: minimax-harbor-registry
+        containers:
+          - name: ray-head
+            image: custom/ray:gpu
+            env:
+              - name: RAY_JOB_AGENT_PULL_MODE
+                value: true
+              - name: RAY_DEDUP_LOGS
+                value: '0'
+              - name: NVIDIA_VISIBLE_DEVICES
+                value: "void"
+              - name: RAY_PROMETHEUS_NAME
+                value: 'thanos-querier'
+              - name: RAY_GRAFANA_IFRAME_HOST
+                value: https://grafana-public.xaminim.com
+              - name: RAY_GRAFANA_HOST
+                value: https://grafana-public.xaminim.com
+              - name: RAY_PROMETHEUS_HOST
+                value: http://vm-select-in.xaminim.com:8481
+            ports:
+              - containerPort: 6379
+                name: gcs
+              - containerPort: 8265
+                name: dashboard
+              - containerPort: 10001
+                name: client
+              - containerPort: 8080
+                name: metrics
+              - containerPort: 8000
+                name: app
+              - containerPort: 44217
+                name: as-metrics
+              - containerPort: 44227
+                name: dash-metrics
+            lifecycle:
+              preStop:
+                exec:
+                  command: ["/bin/sh","-c","ray stop"]
+            securityContext:
+              capabilities:
+                add:
+                  - SYS_PTRACE
+            volumeMounts:
+              - mountPath: /dev/shm
+                mountPropagation: None
+                name: dshm
+            resources:
+              limits:
+                cpu: "${headCpu}"
+                memory: "${headMemory}Gi"
+                nvidia.com/gpu: "0"
+              requests:
+                cpu: "${headCpu}"
+                memory: "${headMemory}Gi"
+                nvidia.com/gpu: "0"
+        volumes:
+          - name: dshm
+            emptyDir:
+              medium: Memory
+  workerGroupSpecs:
+    - replicas: ${replicas}
+      minReplicas: ${replicas}
+      maxReplicas: ${replicas}
+      groupName: ${groupName}
+      rayStartParams:
+        resources: {}
+      template:
+        spec:
+          imagePullSecrets:
+            - name: minimax-registry
+            - name: minimax-harbor-registry
+          restartPolicy: Never
+          containers:
+            - name: ${containerName}
+              image: custom/ray:gpu
+              env:
+                - name: RAY_JOB_AGENT_PULL_MODE
+                  value: true
+                - name: RAY_DEDUP_LOGS
+                  value: '0'
+                - name: PROTOCOL_BUFFERS_PYTHON_IMPLEMENTATION
+                  value: python
+                - name: RAY_PROMETHEUS_NAME
+                  value: 'thanos-querier'
+                - name: RAY_GRAFANA_IFRAME_HOST
+                  value: https://grafana-public.xaminim.com
+                - name: RAY_GRAFANA_HOST
+                  value: https://grafana-public.xaminim.com
+                - name: RAY_PROMETHEUS_HOST
+                  value: http://vm-select-in.xaminim.com:8481
+              lifecycle:
+                preStop:
+                  exec:
+                    command: ["/bin/sh","-c","ray stop"]
+              securityContext:
+                capabilities:
+                  add:
+                    - SYS_PTRACE
+              volumeMounts:
+                - mountPath: /dev/shm
+                  mountPropagation: None
+                  name: dshm
+              resources:
+                limits:
+                  cpu: "${workLimitCpu}"
+                  memory: "${workLimitMemory}Gi"
+                  nvidia.com/gpu: "${workLimitGpu}"
+                requests:
+                  cpu: "${workRequestCpu}"
+                  memory: "${workRequestMemory}Gi"
+                  nvidia.com/gpu: "${workRequestGpu}"
+          volumes:
+            - name: dshm
+              emptyDir:
+                medium: Memory

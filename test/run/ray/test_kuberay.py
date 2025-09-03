@@ -30,7 +30,6 @@ ARTIFACTS_DIR = os.path.join(
     os.path.dirname(os.path.realpath(__file__)), "..", "core", "execution", "artifacts"
 )
 
-
 class TestKubeRayCluster:
     @pytest.fixture
     def mock_k8s_clients(self):
@@ -672,10 +671,56 @@ class TestKubeRayArtifacts:
 
     def test_advanced_cluster_artifact(self):
         """Test advanced cluster generation with GPUs and volumes."""
-        artifact_path = os.path.join(ARTIFACTS_DIR, "expected_kuberay_cluster_advanced.yaml")
+        # artifact_path = os.path.join(ARTIFACTS_DIR, "expected_kuberay_cluster_advanced.yaml")
+        artifact_path = "/Users/laifu/open_source/Run/test/core/execution/artifacts/expected_kuberay_cluster_advanced.yaml"
 
         executor = KubeRayExecutor(
             namespace="ml-team",
+            ray_version="2.43.0",
+            image="custom/ray:gpu",
+            head_cpu="4",
+            head_memory="16Gi",
+            ray_head_start_params={"dashboard-host": "0.0.0.0", "num-cpus": "4"},
+            worker_groups=[
+                KubeRayWorkerGroup(
+                    group_name="gpu-workers",
+                    replicas=4,
+                    min_replicas=2,
+                    max_replicas=8,
+                    cpu_requests="8",
+                    memory_requests="32Gi",
+                    gpus_per_worker=2,
+                )
+            ],
+            volumes=[
+                {"name": "data", "persistentVolumeClaim": {"claimName": "data-pvc"}},
+            ],
+            volume_mounts=[
+                {"name": "data", "mountPath": "/data"},
+            ],
+            labels={"team": "ml", "env": "prod"},
+            env_vars={"NCCL_DEBUG": "INFO"},
+        )
+
+        body = executor.get_cluster_body("ml-training-cluster")
+
+        # Save artifact
+        with open(artifact_path, "w") as f:
+            yaml.dump(body, f, default_flow_style=False, sort_keys=False)
+
+        # Verify GPU resources
+        worker_spec = body["spec"]["workerGroupSpecs"][0]
+        resources = worker_spec["template"]["spec"]["containers"][0]["resources"]
+        assert resources["requests"]["nvidia.com/gpu"] == 2
+        assert resources["limits"]["nvidia.com/gpu"] == 2
+
+    def test_advanced_cluster_artifact1(self):
+        """Test advanced cluster generation with GPUs and volumes."""
+        # artifact_path = os.path.join(ARTIFACTS_DIR, "expected_kuberay_cluster_advanced.yaml")
+        artifact_path = "/Users/laifu/open_source/Run/test/core/execution/artifacts/expected_kuberay_cluster_advanced_1.yaml"
+
+        executor = KubeRayExecutor(
+            namespace="ray",
             ray_version="2.43.0",
             image="custom/ray:gpu",
             head_cpu="4",
