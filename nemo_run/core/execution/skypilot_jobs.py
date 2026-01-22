@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: Copyright (c) 2024 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-FileCopyrightText: Copyright (c) 2025 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -18,7 +18,7 @@ import os
 import subprocess
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Optional, Type, Union
+from typing import Any, Dict, List, Optional, Type, Union
 
 from invoke.context import Context
 
@@ -35,19 +35,21 @@ try:
     import sky
     import sky.task as skyt
     from sky import backends
-    from sky.utils import status_lib
 
     _SKYPILOT_AVAILABLE = True
 except ImportError:
-    ...
+    # suppress import error so we don't crash if skypilot is not installed.
+    pass
 
 logger = logging.getLogger(__name__)
 
 
 @dataclass(kw_only=True)
-class SkypilotExecutor(Executor):
+class SkypilotJobsExecutor(Executor):
     """
-    Dataclass to configure a Skypilot Executor.
+    Dataclass to configure a Skypilot Jobs Executor.
+
+    This executor launches managed jobs and requires the `Skypilot API Server <https://docs.skypilot.co/en/latest/reference/api-server/api-server.html>`.
 
     Some familiarity with `Skypilot <https://skypilot.readthedocs.io/en/latest/docs/index.html>`_ is necessary.
     In order to use this executor, you need to install NeMo Run
@@ -57,7 +59,7 @@ class SkypilotExecutor(Executor):
 
     .. code-block:: python
 
-        skypilot = SkypilotExecutor(
+        skypilot = SkypilotJobsExecutor(
             gpus="A10G",
             gpus_per_node=devices,
             container_image="nvcr.io/nvidia/nemo:dev",
@@ -114,7 +116,7 @@ class SkypilotExecutor(Executor):
     disk_tier: Optional[Union[str, list[str]]] = None
     ports: Optional[tuple[str]] = None
     file_mounts: Optional[dict[str, str]] = None
-    storage_mounts: Optional[dict[str, dict[str, Any]]] = None  # Can be str or dict configs
+    storage_mounts: Optional[dict[str, dict[str, Any]]] = None
     cluster_name: Optional[str] = None
     setup: Optional[str] = None
     autodown: bool = False
@@ -124,7 +126,7 @@ class SkypilotExecutor(Executor):
     infra: Optional[str] = None
     network_tier: Optional[str] = None
     retry_until_up: bool = False
-    packager: Packager = field(default_factory=lambda: GitArchivePackager())  # type: ignore  # noqa: F821
+    packager: Packager = field(default_factory=GitArchivePackager)  # type: ignore  # noqa: F821
 
     def __post_init__(self):
         assert _SKYPILOT_AVAILABLE, (
@@ -142,9 +144,9 @@ class SkypilotExecutor(Executor):
             )
 
     @classmethod
-    def parse_app(cls: Type["SkypilotExecutor"], app_id: str) -> tuple[str, str, int]:
+    def parse_app(cls: Type["SkypilotJobsExecutor"], app_id: str) -> tuple[str, str, int]:
         app = app_id.split("___")
-        _, cluster, task, job_id = app[0], app[1], app[2], app[3]
+        cluster, task, job_id = app[0], app[1], app[2]
         assert cluster and task and job_id, f"Invalid app id for Skypilot: {app_id}"
         return cluster, task, int(job_id)
 
@@ -190,7 +192,6 @@ class SkypilotExecutor(Executor):
                     else:
                         resources_cfg[attr] = value
 
-        # any_of = False
         attrs = [
             "cloud",
             "region",
@@ -219,50 +220,43 @@ class SkypilotExecutor(Executor):
         return resources  # type: ignore
 
     @classmethod
-    def status(
-        cls: Type["SkypilotExecutor"], app_id: str
-    ) -> tuple[Optional["status_lib.ClusterStatus"], Optional[dict]]:
-        import sky.core as sky_core
+    def status(cls: Type["SkypilotJobsExecutor"], app_id: str) -> Optional[dict]:
+        from sky import stream_and_get
         import sky.exceptions as sky_exceptions
-        from sky.utils import status_lib
+        import sky.jobs.client.sdk as sky_jobs
 
-        cluster, _, job_id = cls.parse_app(app_id)
-        try:
-            cluster_details = sky_core.status(cluster)[0]
-            cluster_status: status_lib.ClusterStatus = cluster_details["status"]
-        except Exception:
-            return None, None
+        _, _, job_id = cls.parse_app(app_id)
 
         try:
-            job_queue = sky_core.queue(cluster, all_users=True)
-            job_details = next(filter(lambda job: job["job_id"] == job_id, job_queue))
+            job_details: List[Dict[str, Any]] = stream_and_get(
+                sky_jobs.queue(refresh=True, all_users=True, job_ids=[job_id]),
+            )[0]
         except sky_exceptions.ClusterNotUpError:
-            return cluster_status, None
+            return None
 
-        return cluster_status, job_details
+        return job_details
 
     @classmethod
-    def cancel(cls: Type["SkypilotExecutor"], app_id: str):
-        from sky.core import cancel
+    def cancel(cls: Type["SkypilotJobsExecutor"], app_id: str):
+        from sky.jobs.client.sdk import cancel
 
-        cluster_name, _, job_id = cls.parse_app(app_id=app_id)
-        _, job_details = cls.status(app_id=app_id)
+        _, _, job_id = cls.parse_app(app_id=app_id)
+        job_details = cls.status(app_id=app_id)
         if not job_details:
             return
 
-        cancel(cluster_name=cluster_name, job_ids=[job_id])
+        cancel(job_ids=[job_id])
 
     @classmethod
-    def logs(cls: Type["SkypilotExecutor"], app_id: str, fallback_path: Optional[str]):
-        import sky.core as sky_core
-        from sky.skylet import job_lib
+    def logs(cls: Type["SkypilotJobsExecutor"], app_id: str, fallback_path: Optional[str]):
+        import sky.jobs.client.sdk as sky_jobs
 
-        cluster, _, job_id = cls.parse_app(app_id)
-        _, job_details = cls.status(app_id)
+        _, _, job_id = cls.parse_app(app_id)
+        job_details = cls.status(app_id)
 
         is_terminal = False
-        if job_details and job_lib.JobStatus.is_terminal(job_details["status"]):
-            is_terminal = True
+        if job_details and job_details["status"]:
+            is_terminal = job_details["status"].is_terminal()
         elif not job_details:
             is_terminal = True
         if fallback_path and is_terminal:
@@ -274,7 +268,7 @@ class SkypilotExecutor(Executor):
 
                 return
 
-        sky_core.tail_logs(cluster, job_id)
+        sky_jobs.tail_logs(job_id=job_id)
 
     @property
     def workdir(self) -> str:
@@ -414,51 +408,30 @@ cd /nemo_run/code
     def launch(
         self,
         task: "skyt.Task",
-        cluster_name: Optional[str] = None,
         num_nodes: Optional[int] = None,
-        dryrun: bool = False,
     ) -> tuple[Optional[int], Optional["backends.ResourceHandle"]]:
-        from sky import backends, launch, stream_and_get
+        from sky import stream_and_get
+        from sky.jobs.client.sdk import launch
 
-        # Backward compatibility for SkyPilot 0.10.3+
-        # dump_yaml_str moved from sky.utils.common_utils to yaml_utils
-        try:
-            from sky.utils import yaml_utils
-        except ImportError:
-            from sky.utils import common_utils as yaml_utils
-
-        task_yml = os.path.join(self.job_dir, "skypilot_task.yml")
-        with open(task_yml, "w+") as f:
-            f.write(yaml_utils.dump_yaml_str(task.to_yaml_config()))
-
-        backend = backends.CloudVmRayBackend()
         if num_nodes:
             task.num_nodes = num_nodes
 
-        cluster_name = cluster_name or self.cluster_name or self.experiment_id
-
-        job_id, handle = stream_and_get(
-            launch(
-                task,
-                dryrun=dryrun,
-                cluster_name=cluster_name,
-                backend=backend,
-                idle_minutes_to_autostop=self.idle_minutes_to_autostop,
-                down=self.autodown,
-                fast=True,
-                retry_until_up=self.retry_until_up,
-                # clone_disk_from=clone_disk_from,
-            )
-        )
+        job_id, handle = stream_and_get(launch(task))
 
         return job_id, handle
 
     def cleanup(self, handle: str):
-        import sky.core as sky_core
+        import sky.jobs.client.sdk as sky_jobs
 
         _, _, path_str = handle.partition("://")
         path = path_str.split("/")
         app_id = path[1]
 
-        cluster, _, job_id = self.parse_app(app_id)
-        sky_core.download_logs(cluster, job_ids=[job_id])
+        _, _, job_id = self.parse_app(app_id)
+        sky_jobs.download_logs(
+            name=None,
+            job_id=job_id,
+            refresh=True,
+            controller=True,
+            local_dir=self.job_dir,
+        )

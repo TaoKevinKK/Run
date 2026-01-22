@@ -1,3 +1,18 @@
+# SPDX-FileCopyrightText: Copyright (c) 2025 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+# http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 import base64
 import logging
 import os
@@ -17,10 +32,16 @@ from leptonai.api.v1.types.common import Metadata, LeptonVisibility
 from leptonai.api.v1.types.dedicated_node_group import DedicatedNodeGroup
 from leptonai.api.v1.types.deployment import (
     EnvVar,
+    EnvValue,
     LeptonContainer,
     Mount,
 )
-from leptonai.api.v1.types.job import LeptonJob, LeptonJobState, LeptonJobUserSpec
+from leptonai.api.v1.types.job import (
+    LeptonJob,
+    LeptonJobState,
+    LeptonJobUserSpec,
+    ReservationConfig,
+)
 from leptonai.api.v1.types.replica import Replica
 
 from nemo_run.config import get_nemorun_home
@@ -51,6 +72,8 @@ class LeptonExecutor(Executor):
     shared_memory_size: int = 65536
     resource_shape: str = ""
     node_group: str = ""
+    node_reservation: str = ""
+    secret_vars: dict[str, str] = field(default_factory=dict)
     mounts: list[dict[str, Any]] = field(default_factory=list)
     lepton_job_dir: str = field(init=False, default="")
     image_pull_secrets: list[str] = field(
@@ -58,6 +81,8 @@ class LeptonExecutor(Executor):
     )  # Image pull secrets for container registry authentication
     custom_spec: dict[str, Any] = field(default_factory=dict)
     pre_launch_commands: list[str] = field(default_factory=list)  # Custom commands before launch
+    head_resource_shape: Optional[str] = ""  # Only used for LeptonRayCluster
+    ray_version: Optional[str] = None  # Only used for LeptonRayCluster
 
     def stop_job(self, job_id: str):
         """
@@ -227,6 +252,8 @@ class LeptonExecutor(Executor):
         client = APIClient()
 
         envs = [EnvVar(name=key, value=value) for key, value in self.env_vars.items()]
+        for key, value in self.secret_vars.items():
+            envs.append(EnvVar(name=key, value_from=EnvValue(secret_name_ref=value)))
 
         cmd = ["/bin/bash", "-c", f"bash {self.lepton_job_dir}/launch_script.sh"]
 
@@ -260,8 +287,12 @@ class LeptonExecutor(Executor):
             log=None,
             queue_config=None,
             stopped=None,
-            reservation_config=None,
         )
+
+        if self.node_reservation:
+            job_spec.reservation_config = ReservationConfig(reservation_id=self.node_reservation)
+            job_spec.reservation_config.reservation_id = self.node_reservation
+
         job = LeptonJob(spec=job_spec, metadata=Metadata(id=name))
 
         created_job = client.job.create(job)

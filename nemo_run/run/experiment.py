@@ -55,6 +55,7 @@ from nemo_run.core.execution.docker import DockerExecutor
 from nemo_run.core.execution.lepton import LeptonExecutor
 from nemo_run.core.execution.local import LocalExecutor
 from nemo_run.core.execution.skypilot import SkypilotExecutor
+from nemo_run.core.execution.skypilot_jobs import SkypilotJobsExecutor
 from nemo_run.core.execution.slurm import SlurmExecutor
 from nemo_run.core.frontend.console.api import CONSOLE, configure_logging, deconfigure_logging
 from nemo_run.core.serialization.zlib_json import ZlibJSONSerializer
@@ -201,6 +202,7 @@ nemo experiment cancel {exp_id} 0
         SlurmExecutor,
         LocalExecutor,
         SkypilotExecutor,
+        SkypilotJobsExecutor,
         DockerExecutor,
         DGXCloudExecutor,
         LeptonExecutor,
@@ -208,6 +210,7 @@ nemo experiment cancel {exp_id} 0
     _DETACH_SUPPORTED_EXECUTORS = (
         SlurmExecutor,
         SkypilotExecutor,
+        SkypilotJobsExecutor,
         DGXCloudExecutor,
         LeptonExecutor,
     )
@@ -636,13 +639,13 @@ For more information about `run.Config` and `run.Partial`, please refer to https
         If sequential=True, all tasks will be run one after the other.
         The order is based on the order in which they were added.
 
-        Parallel mode only works if all exectuors in the experiment support it.
+        Parallel mode only works if all executors in the experiment support it.
         Currently, all executors support parallel mode.
 
         In sequential mode, if all executor supports dependencies, then all tasks will be scheduled at once
         by specifying the correct dependencies to each task.
         Otherwise, the experiment.run call will block and each task that is scheduled will be executed sequentially.
-        In this particular case, we cannot guarantee the state of the exeperiment if the process exits in the middle.
+        In this particular case, we cannot guarantee the state of the experiment if the process exits in the middle.
 
         Currently, only the slurm executor supports dependencies.
 

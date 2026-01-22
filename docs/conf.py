@@ -1,3 +1,18 @@
+# SPDX-FileCopyrightText: Copyright (c) 2025 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+# http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 # Configuration file for the Sphinx documentation builder.
 #
 # For the full list of built-in configuration values, see the documentation:
@@ -14,7 +29,7 @@ sys.path.append(str(Path("../../examples").resolve()))
 project = "NeMo-Run"
 copyright = "2025, NVIDIA"
 author = "NVIDIA"
-release = "0.1.0"
+release = "0.5.0"
 
 # -- General configuration ---------------------------------------------------
 # https://www.sphinx-doc.org/en/master/usage/configuration.html#general-configuration
@@ -33,10 +48,26 @@ extensions = [
     "sphinx.ext.githubpages",
     "sphinx.ext.napoleon",
     "sphinxcontrib.mermaid",
+    "sphinx_copybutton",
+    "sphinx_new_tab_link",
 ]
 
 templates_path = ["_templates"]
-exclude_patterns = ["_build", "Thumbs.db", ".DS_Store"]
+exclude_patterns = ["_build", "Thumbs.db", ".DS_Store", "documentation.md"]
+
+# -- Options for MyST Parser (Markdown) --------------------------------------
+# MyST Parser settings
+myst_enable_extensions = [
+    "dollarmath",  # Enables dollar math for inline math
+    "amsmath",  # Enables LaTeX math for display mode
+    "colon_fence",  # Enables code blocks using ::: delimiters instead of ```
+    "deflist",  # Supports definition lists with term: definition format
+    "fieldlist",  # Enables field lists for metadata like :author: Name
+    "tasklist",  # Adds support for GitHub-style task lists with [ ] and [x]
+]
+myst_heading_anchors = 5  # Generates anchor links for headings up to level 5
+myst_fence_as_directive = ["mermaid"]
+
 python_maximum_signature_line_length = 88
 
 # Autoapi settings
@@ -44,7 +75,7 @@ autoapi_generate_api_docs = True
 autoapi_keep_files = False
 autoapi_add_toctree_entry = False
 autoapi_type = "python"
-autoapi_dirs = ["../../nemo_run"]
+autoapi_dirs = ["../nemo_run"]
 autoapi_file_pattern = "*.py"
 autoapi_root = "api"
 autoapi_options = [
@@ -57,10 +88,6 @@ autoapi_options = [
 
 # Autodoc settings
 autodoc_typehints = "signature"
-
-# MyST settings
-myst_heading_anchors = 3
-myst_fence_as_directive = ["mermaid"]
 
 # Napoleon settings
 napoleon_google_docstring = True
@@ -103,3 +130,9 @@ html_theme_options = {
     ],
 }
 html_extra_path = ["project.json", "versions1.json"]
+
+# Github links are now getting rate limited from the Github Actions
+linkcheck_ignore = [
+    ".*github\\.com.*",
+    ".*githubusercontent\\.com.*",
+]

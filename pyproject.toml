@@ -30,7 +30,7 @@ dependencies = [
     "cryptography < 43.0.0",
     "networkx >= 3.3",
     "omegaconf>=2.3.0",
-    "leptonai>=0.25.0",
+    "leptonai>=0.26.6",
     "packaging",
     "toml",
 ]
@@ -48,6 +48,7 @@ local_persistent = "nemo_run.run.torchx_backend.schedulers.local:create_schedule
 docker_persistent = "nemo_run.run.torchx_backend.schedulers.docker:create_scheduler"
 dgx_cloud = "nemo_run.run.torchx_backend.schedulers.dgxcloud:create_scheduler"
 lepton = "nemo_run.run.torchx_backend.schedulers.lepton:create_scheduler"
+skypilot_jobs = "nemo_run.run.torchx_backend.schedulers.skypilot_jobs:create_scheduler"
 
 [project.optional-dependencies]
 skypilot = [
@@ -57,7 +58,8 @@ skypilot-all = [
     "skypilot[all]>=0.10.0",
 ]
 ray = [
-    "kubernetes"
+    "kubernetes",
+    "ray[default]>=2.49.2",
 ]
 
 [dependency-groups]
@@ -86,6 +88,8 @@ docs = [
     "sphinx-autoapi>=3.0.0",
     "nvidia-sphinx-theme",
     "sphinxcontrib-mermaid",
+    "sphinx-copybutton>=0.5.2",
+    "sphinx-new-tab-link>=0.8.0",
 ]
 
 [build-system]

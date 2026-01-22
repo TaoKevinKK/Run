@@ -1,4 +1,20 @@
+# SPDX-FileCopyrightText: Copyright (c) 2025 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+# http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 import base64
+import glob
 import json
 import logging
 import os
@@ -8,7 +24,7 @@ import time
 from dataclasses import dataclass, field
 from enum import Enum
 from pathlib import Path
-from typing import Any, Optional, Type
+from typing import Any, Iterable, Optional
 
 import requests
 from invoke.context import Context
@@ -50,6 +66,7 @@ class DGXCloudExecutor(Executor):
     """
 
     base_url: str
+    kube_apiserver_url: str
     app_id: str
     app_secret: str
     project_name: str
@@ -72,15 +89,24 @@ class DGXCloudExecutor(Executor):
             "appSecret": self.app_secret,
         }
 
-        response = requests.post(url, json=payload, headers=self._default_headers())
-        response_text = response.text.strip()
-        auth_token = json.loads(response_text).get("accessToken", None)  # [1]
-        if not auth_token:
-            logger.error("Failed to retrieve auth token; response was: %s", response_text)
-            return None
+        n_attempts = 0
+        while n_attempts < 3:
+            try:
+                response = requests.post(url, json=payload, headers=self._default_headers())
+                response_text = response.text.strip()
+                auth_token = json.loads(response_text).get("accessToken", None)  # [1]
+                if auth_token:
+                    return auth_token
 
-        logger.debug("Retrieved auth token from %s", url)
-        return auth_token
+                raise ValueError(f"Failed to retrieve auth token; response was: {response_text}")
+
+            except Exception as e:
+                logger.error("Failed to retrieve auth token; error was: %s", e)
+                time.sleep(10)
+                n_attempts += 1
+
+        logger.error("Failed to retrieve auth token after 3 attempts.")
+        return None
 
     def get_project_and_cluster_id(self, token: str) -> tuple[Optional[str], Optional[str]]:
         url = f"{self.base_url}/org-unit/projects"
@@ -296,7 +322,8 @@ class DGXCloudExecutor(Executor):
         launch_script = f"""
 ln -s {self.pvc_job_dir}/ /nemo_run
 cd /nemo_run/code
-{" ".join(cmd)}
+mkdir -p {self.pvc_job_dir}/logs
+{" ".join(cmd)} 2>&1 | tee -a {self.pvc_job_dir}/log_$HOSTNAME.out {self.pvc_job_dir}/log-allranks_0.out
 """
         with open(os.path.join(self.job_dir, "launch_script.sh"), "w+") as f:
             f.write(launch_script)
@@ -344,6 +371,70 @@ cd /nemo_run/code
         r_json = response.json()
         return DGXCloudState(r_json["phase"])
 
+    def fetch_logs(
+        self,
+        job_id: str,
+        stream: bool,
+        stderr: Optional[bool] = None,
+        stdout: Optional[bool] = None,
+    ) -> Iterable[str]:
+        while self.status(job_id) != DGXCloudState.RUNNING:
+            logger.info("Waiting for job to start...")
+            time.sleep(15)
+
+        cmd = ["tail"]
+
+        if stream:
+            cmd.append("-f")
+
+        # setting linked PVC job directory
+        nemo_run_home = get_nemorun_home()
+        job_subdir = self.job_dir[len(nemo_run_home) + 1 :]  # +1 to remove the initial backslash
+        self.pvc_job_dir = os.path.join(self.pvc_nemo_run_dir, job_subdir)
+
+        files = []
+        while len(files) < self.nodes:
+            files = list(glob.glob(f"{self.pvc_job_dir}/log_*.out"))
+            files = [f for f in files if "log-allranks_0" not in f]
+            logger.info(
+                f"Waiting for {self.nodes + 1 - len(files)} log files to be created in {self.pvc_job_dir}..."
+            )
+            time.sleep(3)
+
+        cmd.extend(files)
+
+        logger.info(f"Attempting to stream logs with command: {cmd}")
+
+        proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, text=True, bufsize=1)
+
+        if stream:
+            while True:
+                try:
+                    for line in iter(proc.stdout.readline, ""):
+                        if (
+                            line
+                            and not line.rstrip("\n").endswith(".out <==")
+                            and line.rstrip("\n") != ""
+                        ):
+                            yield f"{line}"
+                        if proc.poll() is not None:
+                            break
+                except Exception as e:
+                    logger.error(f"Error streaming logs: {e}")
+                    time.sleep(3)
+                    continue
+
+        else:
+            try:
+                for line in iter(proc.stdout.readline, ""):
+                    if line:
+                        yield line.rstrip("\n")
+                    if proc.poll() is not None:
+                        break
+            finally:
+                proc.terminate()
+                proc.wait(timeout=2)
+
     def cancel(self, job_id: str):
         # Retrieve the authentication token for the REST calls
         token = self.get_auth_token()
@@ -369,12 +460,6 @@ cd /nemo_run/code
                 response.status_code,
                 response.text,
             )
-
-    @classmethod
-    def logs(cls: Type["DGXCloudExecutor"], app_id: str, fallback_path: Optional[str]):
-        logger.warning(
-            "Logs not available for DGXCloudExecutor based jobs. Please visit the cluster UI to view the logs."
-        )
 
     def cleanup(self, handle: str): ...
 
